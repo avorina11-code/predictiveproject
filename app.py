@@ -3,18 +3,10 @@
 =============================================================================
  CONTROL ROOM WFM — PILOTAGE PRODUCTION TEMPS RÉEL & PRÉDICTIF
 =============================================================================
-Application Streamlit (fichier unique) combinant :
-  - un moteur métier Python (Pandas / NumPy) : cumuls, projections WFM,
-    détection du "Point de Non-Retour" sur le Service Level, diagnostic
-    automatique de cause racine, actions prescriptives ;
-  - des composants d'interface HTML5 / CSS3 / JavaScript injectés via
-    `streamlit.components.v1.html` pour un rendu "Control Room" (bandeau
-    d'alerte animé néon, jauge Chart.js, panneau "Vigie IA" à effet
-    machine à écrire, courbe de projection interactive) ;
-  - un tableau de bord Pandas avec mise en forme conditionnelle (heatmap).
-
-Auteur   : Expert Senior WFM / Data Science / Full-Stack (Python + JS)
-Fichier  : app.py (unique, autonome)
+Application Streamlit (fichier unique autonome) :
+  - Moteur métier WFM (Cumuls, Projections, Point de Non-Retour, Diagnostic IA)
+  - Composants Control Room (Bannière animée, Jauge dynamique, Projections)
+  - Modèles téléchargeables & Tableau de bord interactif
 =============================================================================
 """
 
@@ -33,7 +25,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 # =============================================================================
-# 1. CONFIGURATION GÉNÉRALE DE LA PAGE STREAMLIT
+# 1. CONFIGURATION GÉNÉRALE & STYLES CSS RESPONSIVES
 # =============================================================================
 st.set_page_config(
     page_title="Control Room WFM — Pilotage Temps Réel",
@@ -42,7 +34,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# --- Thème visuel global "Control Room" (fond sombre, accents néon) --------
 st.markdown(
     """
     <style>
@@ -56,6 +47,11 @@ st.markdown(
         color:#8fa3c7; font-size:13px; letter-spacing:2px; text-transform:uppercase;
         font-weight:700; margin-top:18px; margin-bottom:6px;
     }
+    /* Correctif clé pour la réactivité des composants HTML/JS (pas de zoom nécessaire) */
+    iframe {
+        width: 100% !important;
+        border: none !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -65,8 +61,6 @@ st.markdown(
 # 2. UTILITAIRES DE NORMALISATION DES DONNÉES
 # =============================================================================
 def normaliser_nom_colonne(col: str) -> str:
-    """Convertit un nom de colonne brut (avec accents/espaces/%) en un
-    identifiant technique stable, indépendant de l'encodage du fichier."""
     col = str(col).strip().upper()
     remplacements = {
         "É": "E", "È": "E", "Ê": "E", "Ë": "E",
@@ -80,7 +74,6 @@ def normaliser_nom_colonne(col: str) -> str:
     return col
 
 
-# Mapping "nom normalisé attendu" -> "nom interne utilisé dans le code"
 MAP_COLONNES_PROD = {
     "TRANCHE": "tranche",
     "RECUS": "recus",
@@ -113,8 +106,6 @@ MAP_COLONNES_PLANNING = {
 
 
 def parse_heure(val):
-    """Parse une valeur hétérogène (str 'HH:MM', datetime.time, datetime.datetime,
-    NaN) et retourne un objet datetime.time ou None."""
     if val is None:
         return None
     if isinstance(val, float) and np.isnan(val):
@@ -137,8 +128,6 @@ def parse_heure(val):
 
 
 def normaliser_pourcentage(serie: pd.Series) -> pd.Series:
-    """Ramène une colonne de pourcentage sur une échelle 0-100, qu'elle soit
-    saisie en fraction (0.85) ou déjà en pourcentage (85)."""
     serie = pd.to_numeric(serie, errors="coerce")
     if serie.dropna().empty:
         return serie.fillna(0.0)
@@ -148,8 +137,6 @@ def normaliser_pourcentage(serie: pd.Series) -> pd.Series:
 
 
 def charger_fichier(uploaded_file, map_colonnes: dict) -> pd.DataFrame:
-    """Charge un fichier Excel/CSV uploadé et renomme ses colonnes selon le
-    mapping fourni. Les colonnes non reconnues sont conservées telles quelles."""
     if uploaded_file.name.lower().endswith(".csv"):
         df = pd.read_csv(uploaded_file, sep=None, engine="python")
     else:
@@ -160,7 +147,7 @@ def charger_fichier(uploaded_file, map_colonnes: dict) -> pd.DataFrame:
 
 
 # =============================================================================
-# 2 bis. MODÈLES DE FICHIERS TÉLÉCHARGEABLES (templates Excel)
+# 3. GÉNÉRATEURS DE MODÈLES EXCEL (TEMPLATES)
 # =============================================================================
 _HEADER_FONT = Font(name="Arial", bold=True, color="FFFFFF", size=10)
 _HEADER_FILL = PatternFill("solid", fgColor="1F2937")
@@ -171,7 +158,6 @@ _BORDURE = Border(*(Side(style="thin", color="D1D5DB"),) * 4)
 
 
 def _entete_feuille(ws, colonnes: list):
-    """Écrit une ligne d'en-tête stylée (fond sombre, texte blanc, bordures)."""
     for j, col in enumerate(colonnes, start=1):
         cell = ws.cell(row=1, column=j, value=col)
         cell.font = _HEADER_FONT
@@ -183,7 +169,6 @@ def _entete_feuille(ws, colonnes: list):
 
 
 def _ligne_exemple(ws, valeurs: list, ligne: int = 2):
-    """Écrit une ligne d'exemple en italique grisé pour montrer le format attendu."""
     for j, val in enumerate(valeurs, start=1):
         cell = ws.cell(row=ligne, column=j, value=val)
         cell.font = _EXEMPLE_FONT
@@ -191,7 +176,6 @@ def _ligne_exemple(ws, valeurs: list, ligne: int = 2):
 
 
 def _feuille_legende(wb, lignes: list, titre_feuille: str = "Légende"):
-    """Ajoute une feuille 'Légende' décrivant chaque colonne du modèle."""
     ws = wb.create_sheet(titre_feuille)
     entetes = ["Colonne", "Description"]
     for j, e in enumerate(entetes, start=1):
@@ -214,9 +198,6 @@ def _feuille_legende(wb, lignes: list, titre_feuille: str = "Légende"):
 
 
 def generer_modele_production() -> bytes:
-    """Génère (en mémoire) le classeur modèle du fichier 1 — Métriques de
-    production réelles par tranche — avec en-tête stylé, une ligne d'exemple
-    et un onglet Légende expliquant chaque colonne."""
     colonnes = [
         "TRANCHE", "REÇUS", "TRAITÉS", "PRÉVISION", "TRP %", "QS %", "SL %",
         "DMC (S)", "ACW (S)", "DMT (S)", "CONNECTÉS", "EN TRAIT.", "DISPO %",
@@ -232,23 +213,23 @@ def generer_modele_production() -> bytes:
     ws.freeze_panes = "A2"
 
     legende = [
-        ("TRANCHE", "Heure de début de la tranche de 30 min, format HH:MM (ex : 08:00)."),
-        ("REÇUS", "Nombre d'appels/contacts reçus sur la tranche."),
-        ("TRAITÉS", "Nombre d'appels/contacts traités sur la tranche."),
-        ("PRÉVISION", "Volume prévisionnel d'appels pour la tranche (issu du forecast WFM)."),
-        ("TRP %", "Taux de Réponse (%) sur la tranche — saisir en valeur (ex : 96.5) ou en fraction (0.965)."),
-        ("QS %", "Qualité de Service (%) sur la tranche."),
-        ("SL %", "Service Level (%) réalisé sur la tranche."),
-        ("DMC (S)", "Durée Moyenne de Conversation, en secondes."),
-        ("ACW (S)", "After Call Work — post-appel, en secondes."),
-        ("DMT (S)", "Durée Moyenne de Traitement (DMC + ACW), en secondes."),
-        ("CONNECTÉS", "Nombre d'agents effectivement connectés sur la tranche."),
-        ("EN TRAIT.", "Nombre d'agents en traitement d'appel au même instant."),
-        ("DISPO %", "Taux de disponibilité des agents (%)."),
-        ("ABAND. MOY", "Durée moyenne avant abandon des appelants, en secondes."),
-        ("BESOIN", "Effectif requis théorique (Erlang) pour la tranche."),
-        ("PLANNING", "Effectif planifié (issu du planning) sur la tranche."),
-        ("ÉCART", "Écart Connectés − Planning."),
+        ("TRANCHE", "Heure de début de la tranche de 30 min, format HH:MM."),
+        ("REÇUS", "Nombre d'appels reçus."),
+        ("TRAITÉS", "Nombre d'appels traités."),
+        ("PRÉVISION", "Volume prévisionnel d'appels."),
+        ("TRP %", "Taux de Réponse (%)."),
+        ("QS %", "Qualité de Service (%)."),
+        ("SL %", "Service Level (%)."),
+        ("DMC (S)", "Durée Moyenne de Conversation en secondes."),
+        ("ACW (S)", "After Call Work en secondes."),
+        ("DMT (S)", "Durée Moyenne de Traitement en secondes."),
+        ("CONNECTÉS", "Agents connectés."),
+        ("EN TRAIT.", "Agents en communication."),
+        ("DISPO %", "Taux de disponibilité."),
+        ("ABAND. MOY", "Durée moyenne avant abandon (s)."),
+        ("BESOIN", "Effectif requis Erlang."),
+        ("PLANNING", "Effectif planifié."),
+        ("ÉCART", "Écart Connectés - Planning."),
     ]
     _feuille_legende(wb, legende)
 
@@ -258,9 +239,6 @@ def generer_modele_production() -> bytes:
 
 
 def generer_modele_planning() -> bytes:
-    """Génère (en mémoire) le classeur modèle du fichier 2 — Planning agents
-    & pauses déjeuner — avec en-tête stylé, deux lignes d'exemple et un
-    onglet Légende."""
     colonnes = ["Login_Vocalcom", "Code_RH", "Nom_Prenom", "Heure_Debut", "Heure_Fin", "Pause_Debut", "Pause_Fin"]
     exemples = [
         ["AG001", "RH1000", "Dupont Marie", "08:00", "17:00", "12:00", "12:45"],
@@ -276,13 +254,13 @@ def generer_modele_planning() -> bytes:
     ws.freeze_panes = "A2"
 
     legende = [
-        ("Login_Vocalcom", "Identifiant de connexion de l'agent dans l'outil de téléphonie (Vocalcom)."),
-        ("Code_RH", "Matricule / code RH de l'agent."),
-        ("Nom_Prenom", "Nom et prénom de l'agent."),
-        ("Heure_Debut", "Heure de prise de poste, format HH:MM."),
-        ("Heure_Fin", "Heure de fin de poste, format HH:MM."),
-        ("Pause_Debut", "Heure de début de la pause déjeuner, format HH:MM (laisser vide si aucune pause)."),
-        ("Pause_Fin", "Heure de fin de la pause déjeuner, format HH:MM (laisser vide si aucune pause)."),
+        ("Login_Vocalcom", "Identifiant téléphonie de l'agent."),
+        ("Code_RH", "Matricule RH."),
+        ("Nom_Prenom", "Nom et prénom."),
+        ("Heure_Debut", "Heure de début de poste."),
+        ("Heure_Fin", "Heure de fin de poste."),
+        ("Pause_Debut", "Début pause déjeuner."),
+        ("Pause_Fin", "Fin pause déjeuner."),
     ]
     _feuille_legende(wb, legende)
 
@@ -292,12 +270,9 @@ def generer_modele_planning() -> bytes:
 
 
 # =============================================================================
-# 3. DONNÉES DE DÉMONSTRATION (utilisées si aucun fichier n'est chargé)
+# 4. JEU DE DONNÉES DE DÉMONSTRATION
 # =============================================================================
 def generer_demo_production() -> pd.DataFrame:
-    """Génère un jeu de données réaliste sur une journée (08:00-18:00, pas de
-    30 min) avec un scénario de dérive DMT provoquant un point de non-retour
-    en milieu de journée — utile pour démontrer le fonctionnement de l'outil."""
     heures = pd.date_range("08:00", "17:30", freq="30min").time
     rng = np.random.default_rng(42)
     lignes = []
@@ -305,7 +280,6 @@ def generer_demo_production() -> pd.DataFrame:
     for i, h in enumerate(heures):
         prevision = int(60 + 25 * np.sin(i / 3) + rng.integers(-5, 5))
         prevision = max(prevision, 20)
-        # Dérive DMT progressive à partir de la tranche 6 (11:00)
         derive_dmt = 1.0 if i < 6 else 1.0 + min(0.35, (i - 5) * 0.05)
         dmt = dmt_cible_demo * derive_dmt + rng.integers(-8, 8)
         recus = int(prevision * rng.uniform(0.92, 1.12))
@@ -341,8 +315,6 @@ def generer_demo_production() -> pd.DataFrame:
 
 
 def generer_demo_planning(n_agents: int = 28) -> pd.DataFrame:
-    """Génère un planning fictif d'agents avec heures de prise de poste et
-    pauses déjeuner étalées entre 11:30 et 14:00."""
     rng = np.random.default_rng(7)
     lignes = []
     debuts_possibles = ["07:30", "08:00", "08:30", "09:00", "10:00"]
@@ -369,7 +341,7 @@ def generer_demo_planning(n_agents: int = 28) -> pd.DataFrame:
 
 
 # =============================================================================
-# 4. BARRE LATÉRALE — CONFIGURATION DES OBJECTIFS & CHARGEMENT DES FICHIERS
+# 5. BARRE LATÉRALE — CONFIGURATION & PARAMÈTRES
 # =============================================================================
 with st.sidebar:
     st.markdown("## ⚙️ Configuration des objectifs")
@@ -386,7 +358,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("## 📁 Données de production")
     fichier_prod = st.file_uploader(
-        "Fichier 1 — Métriques de production par tranche (Excel/CSV)",
+        "Fichier 1 — Métriques de production (Excel/CSV)",
         type=["xlsx", "xls", "csv"],
         key="fichier_prod",
     )
@@ -396,7 +368,7 @@ with st.sidebar:
         file_name="modele_production_tranches.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key="dl_modele_prod",
-        width='stretch',
+        use_container_width=True,
     )
 
     fichier_planning = st.file_uploader(
@@ -410,15 +382,13 @@ with st.sidebar:
         file_name="modele_planning_agents.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key="dl_modele_planning",
-        width='stretch',
+        use_container_width=True,
     )
 
     mode_demo = fichier_prod is None or fichier_planning is None
     if mode_demo:
         st.info(
-            "Aucun fichier chargé (ou fichier manquant) — l'application "
-            "fonctionne actuellement sur un **jeu de données de démonstration** "
-            "illustrant une dérive DMT en milieu de journée.",
+            "Mode Démo actif : chargement automatique de données simulées.",
             icon="ℹ️",
         )
 
@@ -432,7 +402,7 @@ with st.sidebar:
 
 
 # =============================================================================
-# 5. CHARGEMENT DES DONNÉES (fichiers réels ou démonstration)
+# 6. NETTOYAGE DES FICHIERS
 # =============================================================================
 if fichier_prod is not None:
     df_prod = charger_fichier(fichier_prod, MAP_COLONNES_PROD)
@@ -450,7 +420,6 @@ else:
         columns={k: v for k, v in MAP_COLONNES_PLANNING.items() if k in df_planning.columns}
     )
 
-# --- Nettoyage / typage -----------------------------------------------------
 for col_num in ["recus", "traites", "prevision", "dmc", "acw", "dmt", "connectes",
                  "en_traitement", "aband_moy", "besoin", "planning", "ecart"]:
     if col_num in df_prod.columns:
@@ -462,8 +431,6 @@ for col_pct in ["trp", "qs", "sl", "dispo"]:
 
 df_prod["heure_tranche"] = df_prod["tranche"].apply(parse_heure)
 df_prod = df_prod.dropna(subset=["heure_tranche"]).sort_values("heure_tranche").reset_index(drop=True)
-# Ré-écrit la colonne 'tranche' en texte HH:MM lisible et JSON-sérialisable,
-# quel que soit le type d'origine (str, datetime.time, Timestamp Excel...).
 df_prod["tranche"] = df_prod["heure_tranche"].apply(lambda h: h.strftime("%H:%M"))
 
 for col_h in ["heure_debut", "heure_fin", "pause_debut", "pause_fin"]:
@@ -472,11 +439,9 @@ for col_h in ["heure_debut", "heure_fin", "pause_debut", "pause_fin"]:
 
 
 # =============================================================================
-# 6. MOTEUR WFM — CUMULS, PROJECTION, POINT DE NON-RETOUR, DIAGNOSTIC
+# 7. MOTEUR PREDICTIF & DIAGNOSTIC
 # =============================================================================
 def compter_effectif_planning(df_planning: pd.DataFrame, debut: dt.time, fin: dt.time):
-    """Pour une tranche [debut, fin), retourne (nb agents planifiés présents,
-    nb agents en pause déjeuner sur ce créneau)."""
     n_planifies, n_pause = 0, 0
     for _, agent in df_planning.iterrows():
         hd, hf = agent.get("heure_debut"), agent.get("heure_fin")
@@ -486,16 +451,13 @@ def compter_effectif_planning(df_planning: pd.DataFrame, debut: dt.time, fin: dt
             n_planifies += 1
             p_deb, p_fin = agent.get("pause_debut"), agent.get("pause_fin")
             if p_deb is not None and p_fin is not None:
-                chevauchement = not (p_fin <= debut or p_deb >= fin)
-                if chevauchement:
+                if not (p_fin <= debut or p_deb >= fin):
                     n_pause += 1
     return n_planifies, n_pause
 
 
 def diagnostiquer_cause_racine(row: pd.Series, dmt_cible, seuil_derive_dmt_pct,
                                 seuil_derive_flux_pct, seuil_sous_effectif):
-    """Arbre de décision de diagnostic de cause racine pour une tranche donnée.
-    Retourne (code_diagnostic, libelle, flags)."""
     ecart_dmt_pct = (row["dmt"] - dmt_cible) / dmt_cible if dmt_cible else 0.0
     effectif_dispo = max(row["planning"] - row["agents_en_pause"], 0)
     ecart_effectif = row["connectes"] - effectif_dispo
@@ -521,10 +483,10 @@ def diagnostiquer_cause_racine(row: pd.Series, dmt_cible, seuil_derive_dmt_pct,
         libelle = f"Dérive opérationnelle sur le temps de traitement (DMT +{ecart_dmt_pct*100:.0f}%)"
     elif flag_effectif:
         code = "EFFECTIF"
-        libelle = f"Sous-effectif / inadhérence ou retards plateau ({ecart_effectif:.0f} agent(s) manquant(s))"
+        libelle = f"Sous-effectif / inadhérence ({ecart_effectif:.0f} agent(s) manquant(s))"
     elif flag_flux:
         code = "FLUX"
-        libelle = f"Surflux volumétrique imprévu — Out of Forecast (+{ecart_flux_pct*100:.0f}%)"
+        libelle = f"Surflux volumétrique imprévu (+{ecart_flux_pct*100:.0f}%)"
     else:
         code = "NOMINAL"
         libelle = "Situation nominale — aucune dérive significative détectée"
@@ -564,12 +526,8 @@ ACTIONS_PRESCRIPTIVES = {
 def moteur_wfm(df_prod: pd.DataFrame, df_planning: pd.DataFrame, obj_sl_pct: float,
                capacite_rattrapage: float, dmt_cible, seuil_alerte_marge,
                seuil_derive_dmt_pct, seuil_derive_flux_pct, seuil_sous_effectif):
-    """Cœur du moteur WFM : calcule pour chaque tranche les cumuls, la
-    projection de fin de journée, le point de non-retour et le diagnostic."""
     df = df_prod.copy().reset_index(drop=True)
-    obj_sl_frac = obj_sl_pct / 100.0
 
-    # --- Effectif en pause par tranche (à partir du fichier planning) -------
     agents_en_pause = []
     for _, row in df.iterrows():
         debut = row["heure_tranche"]
@@ -578,25 +536,21 @@ def moteur_wfm(df_prod: pd.DataFrame, df_planning: pd.DataFrame, obj_sl_pct: flo
         agents_en_pause.append(n_pause)
     df["agents_en_pause"] = agents_en_pause
 
-    # --- Cumuls réalisés ------------------------------------------------------
     df["cum_recus"] = df["recus"].cumsum()
     df["conformes_tranche"] = df["recus"] * (df["sl"] / 100.0)
     df["cum_conformes"] = df["conformes_tranche"].cumsum()
     df["sl_cumule"] = np.where(df["cum_recus"] > 0, df["cum_conformes"] / df["cum_recus"] * 100.0, 0.0)
 
-    # --- Prévision restante (tranches futures, strictement après la tranche) -
     total_prevision = df["prevision"].sum()
     df["prevision_cumulee"] = df["prevision"].cumsum()
     df["prevision_future"] = total_prevision - df["prevision_cumulee"]
 
-    # --- SL Max Projeté en fin de journée & Point de Non-Retour --------------
     denominateur = df["cum_recus"] + df["prevision_future"]
     numerateur = df["cum_conformes"] + df["prevision_future"] * capacite_rattrapage
     df["sl_max_projete"] = np.where(denominateur > 0, numerateur / denominateur * 100.0, df["sl_cumule"])
 
     df["point_non_retour"] = df["sl_max_projete"] < obj_sl_pct
 
-    # --- Statut par tranche (vert / orange / rouge) ---------------------------
     def determiner_statut(sl_projete):
         if sl_projete < obj_sl_pct:
             return "POINT DE NON RETOUR ATTEINT"
@@ -607,7 +561,6 @@ def moteur_wfm(df_prod: pd.DataFrame, df_planning: pd.DataFrame, obj_sl_pct: flo
 
     df["statut"] = df["sl_max_projete"].apply(determiner_statut)
 
-    # --- Diagnostic de cause racine par tranche -------------------------------
     codes, libelles = [], []
     for _, row in df.iterrows():
         code, libelle, _ = diagnostiquer_cause_racine(
@@ -618,20 +571,23 @@ def moteur_wfm(df_prod: pd.DataFrame, df_planning: pd.DataFrame, obj_sl_pct: flo
     df["diagnostic_code"] = codes
     df["diagnostic_libelle"] = libelles
 
-    # --- Heure exacte de bascule (première tranche en point de non-retour) ---
     heure_bascule = None
     tranches_bascule = df.loc[df["point_non_retour"], "tranche"]
     if not tranches_bascule.empty:
         heure_bascule = tranches_bascule.iloc[0]
 
+    # FIX IA : Sélection de la dernière tranche ayant du flux réel
+    df_realise = df[df["recus"] > 0]
+    derniere_ligne = df_realise.iloc[-1] if not df_realise.empty else df.iloc[-1]
+
     synthese = {
         "heure_bascule": heure_bascule,
-        "statut_actuel": df["statut"].iloc[-1],
-        "sl_cumule_actuel": df["sl_cumule"].iloc[-1],
-        "sl_max_projete_actuel": df["sl_max_projete"].iloc[-1],
-        "diagnostic_code_actuel": df["diagnostic_code"].iloc[-1],
-        "diagnostic_libelle_actuel": df["diagnostic_libelle"].iloc[-1],
-        "derniere_tranche": df["tranche"].iloc[-1],
+        "statut_actuel": derniere_ligne["statut"],
+        "sl_cumule_actuel": derniere_ligne["sl_cumule"],
+        "sl_max_projete_actuel": derniere_ligne["sl_max_projete"],
+        "diagnostic_code_actuel": derniere_ligne["diagnostic_code"],
+        "diagnostic_libelle_actuel": derniere_ligne["diagnostic_libelle"],
+        "derniere_tranche": derniere_ligne["tranche"],
     }
     return df, synthese
 
@@ -645,419 +601,249 @@ actions_actuelles = ACTIONS_PRESCRIPTIVES.get(synthese["diagnostic_code_actuel"]
 
 
 # =============================================================================
-# 7. COMPOSANTS UI — CONTROL ROOM (HTML / CSS / JS injectés)
+# 8. COMPOSANTS D'INTERFACE HTML/JS (RESPONSIVES)
 # =============================================================================
 def render_banniere_alerte(statut: str, heure_bascule, sl_actuel: float, sl_projete: float, obj_sl: float):
-    """Bandeau supérieur dynamique — vert / orange / rouge clignotant néon."""
     if statut == "POINT DE NON RETOUR ATTEINT":
         couleur, icone, anim = "#ff2d55", "🚨", "blink-neon 1.1s infinite"
-        message = f"POINT DE NON-RETOUR ATTEINT À {heure_bascule} — OBJECTIF SL {obj_sl:.0f}% MATHÉMATIQUEMENT INATTEIGNABLE"
+        message = f"POINT DE NON-RETOUR ATTEINT À {heure_bascule} — OBJECTIF SL {obj_sl:.0f}% INATTEIGNABLE"
     elif statut == "EN DANGER":
         couleur, icone, anim = "#ffae00", "⚠️", "pulse-orange 1.6s infinite"
-        message = "SL EN DANGER — MARGE RÉSIDUELLE FAIBLE AVANT LE POINT DE NON-RETOUR"
+        message = "SL EN DANGER — MARGE RÉSIDUELLE FAIBLE"
     else:
         couleur, icone, anim = "#00ff88", "✅", "none"
         message = "SITUATION SOUS CONTRÔLE — OBJECTIF SL ATTEIGNABLE"
 
     tpl = string.Template(
         """
+        <!DOCTYPE html>
+        <html>
+        <head>
         <style>
+        body { margin:0; padding:0; background:transparent; }
         @keyframes blink-neon {
-            0%, 100% { opacity:1; box-shadow:0 0 20px 6px $couleur; }
-            50% { opacity:0.55; box-shadow:0 0 55px 16px $couleur; }
+            0%, 100% { opacity:1; box-shadow:0 0 15px 4px $couleur; }
+            50% { opacity:0.6; box-shadow:0 0 35px 10px $couleur; }
         }
         @keyframes pulse-orange {
-            0%, 100% { box-shadow:0 0 10px 2px $couleur; }
-            50% { box-shadow:0 0 28px 8px $couleur; }
+            0%, 100% { box-shadow:0 0 8px 2px $couleur; }
+            50% { box-shadow:0 0 20px 6px $couleur; }
         }
         .banniere {
             background: linear-gradient(90deg, #0a0e17 0%, ${couleur}22 100%);
             border: 2px solid $couleur;
-            border-radius: 14px;
-            padding: 18px 26px;
+            border-radius: 12px;
+            padding: 14px 20px;
             display: flex; align-items: center; justify-content: space-between;
             font-family: 'Segoe UI', sans-serif; color: #f2f6ff;
             animation: $anim;
+            box-sizing: border-box;
         }
-        .banniere-txt { font-size: 19px; font-weight: 800; letter-spacing: 0.4px; }
-        .banniere-sub { font-size: 13px; opacity: 0.85; margin-top: 6px; color:#b9c6de;}
-        .banniere-metric { font-size: 30px; font-weight: 900; color: $couleur; text-align:right; }
-        .banniere-metric-label { font-size: 11px; color:#8fa3c7; text-align:right; letter-spacing:1px;}
+        .banniere-txt { font-size: 16px; font-weight: 800; }
+        .banniere-sub { font-size: 12px; opacity: 0.85; margin-top: 4px; color:#b9c6de; }
+        .banniere-metric { font-size: 24px; font-weight: 900; color: $couleur; text-align:right; }
+        .banniere-metric-label { font-size: 10px; color:#8fa3c7; text-align:right; letter-spacing:1px; }
         </style>
+        </head>
+        <body>
         <div class="banniere">
           <div>
             <div class="banniere-txt">$icone $message</div>
-            <div class="banniere-sub">SL cumulé réalisé : $sl_actuel% &nbsp;|&nbsp; SL max projeté fin de journée : $sl_projete% &nbsp;|&nbsp; Objectif : $obj_sl%</div>
+            <div class="banniere-sub">SL cumulé : $sl_actuel% &nbsp;|&nbsp; SL max projeté : $sl_projete% &nbsp;|&nbsp; Objectif : $obj_sl%</div>
           </div>
           <div>
             <div class="banniere-metric">$sl_projete%</div>
             <div class="banniere-metric-label">SL PROJETÉ</div>
           </div>
         </div>
+        </body>
+        </html>
         """
     )
     html = tpl.substitute(
         couleur=couleur, icone=icone, anim=anim, message=message,
         sl_actuel=f"{sl_actuel:.1f}", sl_projete=f"{sl_projete:.1f}", obj_sl=f"{obj_sl:.0f}",
     )
-    components.html(html, height=115)
+    components.html(html, height=100)
 
 
 def render_jauge_sl(sl_actuel: float, sl_projete: float, obj_sl: float):
-    """Jauge à aiguille (Chart.js + plugin custom) affichant le SL max projeté,
-    avec repères SL actuel / objectif."""
-    zone_rouge = max(obj_sl - 15, 0)
-    zone_orange = 15
-    zone_verte = max(100 - obj_sl, 0)
-
     tpl = string.Template(
         """
-        <div style="background:#0a0e17; border:1px solid #1c2536; border-radius:16px; padding:14px;">
-          <canvas id="gaugeChart" height="230"></canvas>
-          <div style="display:flex; justify-content:space-around; margin-top:6px; font-family:'Segoe UI',sans-serif;">
-            <div style="text-align:center;"><div style="color:#8fa3c7;font-size:11px;">SL ACTUEL CUMULÉ</div><div style="color:#00e5ff;font-size:20px;font-weight:800;">$sl_actuel%</div></div>
-            <div style="text-align:center;"><div style="color:#8fa3c7;font-size:11px;">SL MAX PROJETÉ</div><div style="color:#ffffff;font-size:20px;font-weight:800;">$sl_projete%</div></div>
-            <div style="text-align:center;"><div style="color:#8fa3c7;font-size:11px;">OBJECTIF</div><div style="color:#00ff88;font-size:20px;font-weight:800;">$obj_sl%</div></div>
-          </div>
-        </div>
-        <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-        <script>
-        const ctx = document.getElementById('gaugeChart').getContext('2d');
-        const valeur = $sl_projete_raw;
-
-        const aiguillePlugin = {
-          id: 'aiguillePlugin',
-          afterDatasetsDraw(chart) {
-            const meta = chart.getDatasetMeta(0);
-            const centre = meta.data[0];
-            if (!centre) return;
-            const cx = centre.x, cy = centre.y;
-            const rayon = (centre.outerRadius) * 0.92;
-            const angle = Math.PI * (1 - (valeur / 100));
-            const x2 = cx + rayon * Math.cos(angle);
-            const y2 = cy - rayon * Math.sin(angle);
-            const c = chart.ctx;
-            c.save();
-            c.strokeStyle = '#ffffff';
-            c.lineWidth = 4;
-            c.beginPath();
-            c.moveTo(cx, cy);
-            c.lineTo(x2, y2);
-            c.stroke();
-            c.beginPath();
-            c.fillStyle = '#ffffff';
-            c.arc(cx, cy, 7, 0, 2 * Math.PI);
-            c.fill();
-            c.restore();
-          }
-        };
-
-        new Chart(ctx, {
-          type: 'doughnut',
-          data: {
-            labels: ['Zone rouge', 'Zone orange', 'Zone verte'],
-            datasets: [{
-              data: [$zone_rouge, $zone_orange, $zone_verte],
-              backgroundColor: ['#ff2d55', '#ffae00', '#00ff88'],
-              borderWidth: 0,
-            }]
-          },
-          options: {
-            circumference: 180,
-            rotation: -90,
-            cutout: '68%',
-            plugins: { legend: { display: false }, tooltip: { enabled: false } },
-            animation: { animateRotate: true, duration: 900 },
-          },
-          plugins: [aiguillePlugin],
-        });
-        </script>
-        """
-    )
-    html = tpl.substitute(
-        sl_actuel=f"{sl_actuel:.1f}", sl_projete=f"{sl_projete:.1f}", obj_sl=f"{obj_sl:.0f}",
-        sl_projete_raw=f"{sl_projete:.2f}", zone_rouge=f"{zone_rouge:.1f}",
-        zone_orange=f"{zone_orange:.1f}", zone_verte=f"{zone_verte:.1f}",
-    )
-    components.html(html, height=340)
-
-
-def render_courbe_projection(df: pd.DataFrame, obj_sl: float):
-    """Courbe interactive Chart.js : SL cumulé réalisé vs SL max projeté vs
-    ligne d'objectif, tranche par tranche."""
-    labels = [str(v) for v in df["tranche"].tolist()]
-    sl_cumule = [float(v) for v in df["sl_cumule"].round(1).tolist()]
-    sl_projete = [float(v) for v in df["sl_max_projete"].round(1).tolist()]
-    objectif = [round(float(obj_sl), 1)] * len(df)
-    bascule_idx = df.index[df["point_non_retour"]].tolist()
-    bascule_x = labels[bascule_idx[0]] if bascule_idx else None
-
-    tpl = string.Template(
-        """
-        <div style="background:#0a0e17; border:1px solid #1c2536; border-radius:16px; padding:16px;">
-          <canvas id="courbeChart" height="230"></canvas>
-        </div>
-        <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-        <script>
-        const ctx2 = document.getElementById('courbeChart').getContext('2d');
-        new Chart(ctx2, {
-          type: 'line',
-          data: {
-            labels: $labels,
-            datasets: [
-              {
-                label: 'SL cumulé réalisé (%)',
-                data: $sl_cumule,
-                borderColor: '#00e5ff',
-                backgroundColor: 'rgba(0,229,255,0.08)',
-                borderWidth: 2, tension: 0.25, fill: true, pointRadius: 2,
-              },
-              {
-                label: 'SL max projeté fin de journée (%)',
-                data: $sl_projete,
-                borderColor: '#ffae00',
-                borderWidth: 2, borderDash: [6, 4], tension: 0.25, pointRadius: 2, fill: false,
-              },
-              {
-                label: 'Objectif SL (%)',
-                data: $objectif,
-                borderColor: '#00ff88',
-                borderWidth: 2, borderDash: [2, 2], pointRadius: 0, fill: false,
-              },
-            ]
-          },
-          options: {
-            responsive: true,
-            interaction: { mode: 'index', intersect: false },
-            plugins: {
-              legend: { labels: { color: '#c7d3e8', font: { size: 11 } } },
-              tooltip: { mode: 'index', intersect: false },
-            },
-            scales: {
-              x: { ticks: { color: '#8fa3c7' }, grid: { color: '#141b2b' } },
-              y: { ticks: { color: '#8fa3c7' }, grid: { color: '#141b2b' }, suggestedMin: 0, suggestedMax: 100 },
-            },
-          }
-        });
-        </script>
-        """
-    )
-    html = tpl.substitute(
-        labels=json.dumps(labels), sl_cumule=json.dumps(sl_cumule),
-        sl_projete=json.dumps(sl_projete), objectif=json.dumps(objectif),
-    )
-    components.html(html, height=300)
-    if bascule_x:
-        st.caption(f"⛔ Bascule projetée au point de non-retour visible à la tranche **{bascule_x}**.")
-
-
-def render_vigie_ia(diagnostic_libelle: str, actions: list, heure_analyse: str, statut: str):
-    """Panneau 'Vigie IA Assistant' avec effet machine à écrire (JavaScript)."""
-    couleur = {"POINT DE NON RETOUR ATTEINT": "#ff2d55", "EN DANGER": "#ffae00"}.get(statut, "#00ff88")
-    texte_analyse = f"[ANALYSE VIGIE — TRANCHE {heure_analyse}]\n> DIAGNOSTIC : {diagnostic_libelle}\n> RECOMMANDATIONS EN COURS DE GÉNÉRATION..."
-    actions_html = "".join(f'<div class="vigie-action">▸ {a}</div>' for a in actions)
-
-    tpl = string.Template(
-        """
-        <style>
-        .vigie-panel {
-            background: #060a12; border: 1px solid $couleur; border-radius: 14px;
-            padding: 18px 22px; font-family: 'Consolas', 'Courier New', monospace;
-            box-shadow: 0 0 18px 0 ${couleur}33;
-        }
-        .vigie-header { color: $couleur; font-size: 14px; font-weight: 800; letter-spacing: 1px; margin-bottom: 10px; }
-        .vigie-text { color: #c9f0ff; font-size: 13.5px; line-height: 1.7; white-space: pre-wrap; min-height: 70px; }
-        .vigie-actions { margin-top: 14px; border-top: 1px dashed #223049; padding-top: 10px; }
-        .vigie-action { color: #e6f1ff; font-size: 13px; padding: 3px 0; opacity: 0; animation: apparition 0.5s forwards; }
-        @keyframes apparition { to { opacity: 1; } }
-        .curseur { display:inline-block; width:8px; background:$couleur; animation: clignote 0.8s infinite; }
-        @keyframes clignote { 0%,100% {opacity:1;} 50% {opacity:0;} }
-        </style>
-        <div class="vigie-panel">
-          <div class="vigie-header">🤖 VIGIE IA ASSISTANT — ANALYSE PRÉDICTIVE & CAUSE RACINE</div>
-          <div id="vigie-text" class="vigie-text"></div>
-          <div class="vigie-actions">$actions_html</div>
-        </div>
-        <script>
-        const texte = $texte_json;
-        let i = 0;
-        const el = document.getElementById('vigie-text');
-        function ecrire() {
-            if (i < texte.length) {
-                el.innerHTML = texte.substring(0, i + 1).replace(/\\n/g, '<br>') + '<span class="curseur">&nbsp;</span>';
-                i++;
-                setTimeout(ecrire, 14);
-            } else {
-                el.innerHTML = texte.replace(/\\n/g, '<br>');
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+          <style>
+            body { margin: 0; padding: 0; background: transparent; }
+            .card {
+              background: #0a0e17;
+              border: 1px solid #1c2536;
+              border-radius: 14px;
+              padding: 12px;
+              box-sizing: border-box;
             }
-        }
-        ecrire();
-        </script>
+            .chart-box { position: relative; width: 100%; height: 160px; }
+            .kpi-row { display: flex; justify-content: space-around; margin-top: 6px; font-family: 'Segoe UI', sans-serif; }
+            .kpi-val { font-size: 18px; font-weight: 800; }
+            .kpi-lbl { color: #8fa3c7; font-size: 10px; letter-spacing: 0.5px; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <div class="chart-box"><canvas id="gaugeChart"></canvas></div>
+            <div class="kpi-row">
+              <div style="text-align:center;"><div class="kpi-lbl">SL CUMULÉ</div><div class="kpi-val" style="color:#00e5ff;">$sl_actuel%</div></div>
+              <div style="text-align:center;"><div class="kpi-lbl">SL PROJETÉ</div><div class="kpi-val" style="color:#ffffff;">$sl_projete%</div></div>
+              <div style="text-align:center;"><div class="kpi-lbl">OBJECTIF</div><div class="kpi-val" style="color:#00ff88;">$obj_sl%</div></div>
+            </div>
+          </div>
+          <script>
+            const ctx = document.getElementById('gaugeChart').getContext('2d');
+            new Chart(ctx, {
+              type: 'doughnut',
+              data: {
+                datasets: [{
+                  data: [$sl_projete, Math.max(0, 100 - $sl_projete)],
+                  backgroundColor: ['$sl_projete' >= '$obj_sl' ? '#00ff88' : '#ff2d55', '#1c2536'],
+                  borderWidth: 0
+                }]
+              },
+              options: {
+                rotation: -90, circumference: 180, cutout: '75%',
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: false }, tooltip: { enabled: false } }
+              }
+            });
+          </script>
+        </body>
+        </html>
         """
     )
     html = tpl.substitute(
-        couleur=couleur, actions_html=actions_html, texte_json=json.dumps(texte_analyse),
+        sl_actuel=f"{sl_actuel:.1f}", sl_projete=f"{sl_projete:.1f}", obj_sl=f"{obj_sl:.0f}"
     )
-    components.html(html, height=210 + max(len(actions), 1) * 26)
+    components.html(html, height=230)
 
 
-def construire_dataframe_affichage(df: pd.DataFrame) -> pd.DataFrame:
-    """Construit le dataframe final avec libellés français pour l'affichage."""
-    df_aff = pd.DataFrame({
-        "Tranche": df["tranche"],
-        "Reçus": df["recus"].astype(int),
-        "Traités": df["traites"].astype(int),
-        "Prévision": df["prevision"].astype(int),
-        "TRP %": df["trp"].round(1),
-        "QS %": df["qs"].round(1),
-        "SL %": df["sl"].round(1),
-        "DMT (S)": df["dmt"].round(0).astype(int),
-        "ACW (S)": df["acw"].round(0).astype(int),
-        "Connectés": df["connectes"].astype(int),
-        "Planning": df["planning"].astype(int),
-        "En pause": df["agents_en_pause"].astype(int),
-        "Écart Effectif": (df["connectes"] - (df["planning"] - df["agents_en_pause"])).astype(int),
-        "SL Cumulé %": df["sl_cumule"].round(1),
-        "SL Max Projeté %": df["sl_max_projete"].round(1),
-        "Statut": df["statut"],
-        "Diagnostic": df["diagnostic_libelle"],
-    })
-    return df_aff
+def render_graphique_projections(df: pd.DataFrame, obj_sl: float):
+    tranches_json = json.dumps(df["tranche"].tolist())
+    sl_reel_json = json.dumps(df["sl_cumule"].tolist())
+    sl_proj_json = json.dumps(df["sl_max_projete"].tolist())
 
-
-def styliser_dataframe(df_aff: pd.DataFrame, obj_sl: float, obj_qs: float, dmt_cible: float,
-                        seuil_alerte_marge: float):
-    """Applique une mise en forme conditionnelle (heatmap vert/jaune/rouge)."""
-
-    def couleur_pct(val, objectif):
-        try:
-            v = float(val)
-        except (TypeError, ValueError):
-            return ""
-        if v >= objectif:
-            return "background-color:#0a3d2c;color:#4dffb0;"
-        elif v >= objectif - 10:
-            return "background-color:#4a3a05;color:#ffd166;"
-        else:
-            return "background-color:#4a0a1c;color:#ff6b8b;"
-
-    def couleur_dmt(val):
-        try:
-            v = float(val)
-        except (TypeError, ValueError):
-            return ""
-        ecart = (v - dmt_cible) / dmt_cible if dmt_cible else 0
-        if ecart <= 0.05:
-            return "background-color:#0a3d2c;color:#4dffb0;"
-        elif ecart <= seuil_derive_dmt_pct:
-            return "background-color:#4a3a05;color:#ffd166;"
-        else:
-            return "background-color:#4a0a1c;color:#ff6b8b;"
-
-    def couleur_effectif(val):
-        try:
-            v = float(val)
-        except (TypeError, ValueError):
-            return ""
-        if v >= 0:
-            return "background-color:#0a3d2c;color:#4dffb0;"
-        elif v >= -seuil_sous_effectif:
-            return "background-color:#4a3a05;color:#ffd166;"
-        else:
-            return "background-color:#4a0a1c;color:#ff6b8b;"
-
-    def couleur_statut(val):
-        if val == "POINT DE NON RETOUR ATTEINT":
-            return "background-color:#4a0a1c;color:#ff6b8b;font-weight:700;"
-        elif val == "EN DANGER":
-            return "background-color:#4a3a05;color:#ffd166;font-weight:700;"
-        else:
-            return "background-color:#0a3d2c;color:#4dffb0;font-weight:700;"
-
-    styler = (
-        df_aff.style
-        .map(lambda v: couleur_pct(v, obj_sl), subset=["SL %", "SL Cumulé %", "SL Max Projeté %"])
-        .map(lambda v: couleur_pct(v, obj_qs), subset=["QS %", "TRP %"])
-        .map(couleur_dmt, subset=["DMT (S)"])
-        .map(couleur_effectif, subset=["Écart Effectif"])
-        .map(couleur_statut, subset=["Statut"])
-        .set_properties(**{"font-family": "Segoe UI, sans-serif", "font-size": "12.5px"})
+    tpl = string.Template(
+        """
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+          <style>
+            body { margin: 0; padding: 0; background: transparent; }
+            .card { background: #0a0e17; border: 1px solid #1c2536; border-radius: 14px; padding: 12px; }
+            .chart-box { position: relative; width: 100%; height: 210px; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <div class="chart-box"><canvas id="projChart"></canvas></div>
+          </div>
+          <script>
+            const ctx = document.getElementById('projChart').getContext('2d');
+            new Chart(ctx, {
+              type: 'line',
+              data: {
+                labels: $tranches,
+                datasets: [
+                  { label: 'SL Réel Cumulé (%)', data: $sl_reel, borderColor: '#00e5ff', borderWidth: 2, fill: false },
+                  { label: 'SL Max Projeté (%)', data: $sl_proj, borderColor: '#ffae00', borderWidth: 2, borderDash: [4, 4], fill: false },
+                  { label: 'Objectif SL', data: Array($tranches.length).fill($obj_sl), borderColor: '#00ff88', borderWidth: 1.5, borderDash: [2, 2], pointRadius: 0 }
+                ]
+              },
+              options: {
+                responsive: true, maintainAspectRatio: false,
+                scales: {
+                  y: { min: 0, max: 100, grid: { color: '#1c2536' }, ticks: { color: '#8fa3c7' } },
+                  x: { grid: { color: '#1c2536' }, ticks: { color: '#8fa3c7' } }
+                },
+                plugins: { legend: { labels: { color: '#e6f1ff' } } }
+              }
+            });
+          </script>
+        </body>
+        </html>
+        """
     )
-    return styler
+    html = tpl.substitute(
+        tranches=tranches_json, sl_reel=sl_reel_json, sl_proj=sl_proj_json, obj_sl=obj_sl
+    )
+    components.html(html, height=240)
 
 
 # =============================================================================
-# 8. MISE EN PAGE PRINCIPALE
+# 9. DISPOSITION DE LA PAGE & RENDU D'AFFICHAGE
 # =============================================================================
-st.markdown("# 📡 CONTROL ROOM — Pilotage Production Temps Réel & Prédictif")
-st.caption(
-    "Détection du point de non-retour SL · Diagnostic automatique de cause racine · "
-    "Actions prescriptives Vigie"
-)
+st.title("📡 Control Room WFM — Pilotage Temps Réel")
 
+# 1. Bandeau supérieur d'alerte
 render_banniere_alerte(
-    synthese["statut_actuel"], synthese["heure_bascule"],
-    synthese["sl_cumule_actuel"], synthese["sl_max_projete_actuel"], obj_sl,
+    synthese["statut_actuel"],
+    synthese["heure_bascule"],
+    synthese["sl_cumule_actuel"],
+    synthese["sl_max_projete_actuel"],
+    obj_sl,
 )
 
-st.markdown('<div class="bloc-titre">Indicateurs clés — dernière tranche analysée</div>', unsafe_allow_html=True)
-k1, k2, k3, k4, k5 = st.columns(5)
-k1.metric("SL cumulé réalisé", f"{synthese['sl_cumule_actuel']:.1f}%")
-k2.metric("SL max projeté", f"{synthese['sl_max_projete_actuel']:.1f}%",
-          delta=f"{synthese['sl_max_projete_actuel'] - obj_sl:.1f} pts vs objectif")
-k3.metric("Objectif SL", f"{obj_sl:.0f}%")
-heure_b = str(synthese["heure_bascule"]) if synthese.get("heure_bascule") and pd.notna(synthese["heure_bascule"]) else "Non atteinte"
-k4.metric("Heure de bascule", heure_b)
-k5.metric("Appels reçus (cumul)", f"{int(df_result['cum_recus'].iloc[-1])}")
+st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
 
-st.markdown("---")
+# 2. Section Graphiques & Diagnostic IA
+col_g1, col_g2 = st.columns([1, 2])
 
-col_g, col_c = st.columns([1, 2])
-with col_g:
-    st.markdown('<div class="bloc-titre">Jauge de survie SL</div>', unsafe_allow_html=True)
+with col_g1:
+    st.markdown("<div class='bloc-titre'>Jauge de Survie SL</div>", unsafe_allow_html=True)
     render_jauge_sl(synthese["sl_cumule_actuel"], synthese["sl_max_projete_actuel"], obj_sl)
-with col_c:
-    st.markdown('<div class="bloc-titre">Projection SL — tranche par tranche</div>', unsafe_allow_html=True)
-    render_courbe_projection(df_result, obj_sl)
 
-st.markdown('<div class="bloc-titre">Vigie IA — diagnostic & actions prescriptives</div>', unsafe_allow_html=True)
-render_vigie_ia(
-    synthese["diagnostic_libelle_actuel"], actions_actuelles,
-    synthese["derniere_tranche"], synthese["statut_actuel"],
-)
+with col_g2:
+    st.markdown("<div class='bloc-titre'>Projection Trajectoire de Fin de Journée</div>", unsafe_allow_html=True)
+    render_graphique_projections(df_result, obj_sl)
 
 st.markdown("---")
-st.markdown('<div class="bloc-titre">Tableau de bord détaillé — toutes tranches</div>', unsafe_allow_html=True)
 
-df_affichage = construire_dataframe_affichage(df_result)
-styler = styliser_dataframe(df_affichage, obj_sl, obj_qs, dmt_cible, seuil_alerte_marge)
-st.dataframe(styler, width='stretch', height=480)
+# 3. Diagnostic IA & Actions
+col_ia1, col_ia2 = st.columns([1, 1])
 
-# --- Export des résultats ----------------------------------------------------
-csv_export = df_affichage.to_csv(index=False, sep=";").encode("utf-8-sig")
-st.download_button(
-    "⬇️ Exporter le tableau de bord (CSV)",
-    data=csv_export,
-    file_name=f"control_room_wfm_{dt.date.today().isoformat()}.csv",
-    mime="text/csv",
+with col_ia1:
+    st.markdown("### 🤖 Diagnostic Vigie IA")
+    st.info(f"**Tranche :** {synthese['derniere_tranche']}\n\n**Cause :** {synthese['diagnostic_libelle_actuel']}")
+
+with col_ia2:
+    st.markdown("### 📋 Plan d'Action Recommandé")
+    for act in actions_actuelles:
+        st.markdown(f"* 🔹 {act}")
+
+st.markdown("---")
+
+# 4. Tableau Détaillé par Tranche
+st.markdown("### 📊 Tableau de Bord Détaillé")
+
+cols_display = ["tranche", "recus", "prevision", "sl", "sl_cumule", "sl_max_projete", "dmt", "connectes", "planning", "statut"]
+df_show = df_result[cols_display].copy()
+df_show.columns = ["Tranche", "Reçus", "Prévu", "SL Tranche (%)", "SL Cumulé (%)", "SL Max Projeté (%)", "DMT (s)", "Connectés", "Planning", "Statut"]
+
+def colorer_statut(val):
+    if val == "POINT DE NON RETOUR ATTEINT":
+        return "background-color: #ff2d55; color: white; font-weight: bold;"
+    elif val == "EN DANGER":
+        return "background-color: #ffae00; color: black; font-weight: bold;"
+    return "background-color: #00ff88; color: black; font-weight: bold;"
+
+st.dataframe(
+    df_show.style.applymap(colorer_statut, subset=["Statut"])
+    .format({
+        "SL Tranche (%)": "{:.1f}%",
+        "SL Cumulé (%)": "{:.1f}%",
+        "SL Max Projeté (%)": "{:.1f}%",
+        "DMT (s)": "{:.0f}s"
+    }),
+    use_container_width=True,
+    height=400
 )
-
-with st.expander("ℹ️ Méthodologie du moteur prédictif"):
-    st.markdown(
-        """
-        **Point de non-retour** : à chaque tranche, le SL maximum théoriquement
-        atteignable en fin de journée est recalculé selon :
-
-        `SL_Max_Projeté = (Conformes_cumulés + Prévision_future × Capacité_rattrapage) / (Reçus_cumulés + Prévision_future)`
-
-        Dès que cette valeur passe sous l'objectif SL, la tranche est marquée
-        comme point de non-retour : même en traitant 100 % du flux restant
-        dans les temps, l'objectif de la journée ne peut plus être atteint.
-
-        **Diagnostic de cause racine** : à chaque tranche, l'écart de DMT,
-        l'écart d'effectif disponible (planning − agents en pause vs agents
-        connectés) et l'écart de flux (reçus vs prévision) sont comparés à des
-        seuils paramétrables. Le diagnostic combine ces facteurs selon l'arbre
-        de décision défini dans la barre latérale.
-        """
-    )
