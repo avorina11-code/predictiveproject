@@ -705,15 +705,20 @@ def render_banniere_alerte(statut: str, heure_bascule, sl_actuel: float, sl_proj
 
 def render_jauge_sl(sl_actuel: float, sl_projete: float, obj_sl: float):
     """Jauge à aiguille (Chart.js + plugin custom) affichant le SL max projeté,
-    avec repères SL actuel / objectif."""
+    avec repères SL actuel / objectif.
+    Le canvas est enveloppé dans un conteneur à hauteur fixe et
+    maintainAspectRatio est désactivé pour un rendu pleinement responsive
+    (plus besoin de zoomer pour voir le graphique correctement)."""
     zone_rouge = max(obj_sl - 15, 0)
     zone_orange = 15
     zone_verte = max(100 - obj_sl, 0)
 
     tpl = string.Template(
         """
-        <div style="background:#0a0e17; border:1px solid #1c2536; border-radius:16px; padding:14px;">
-          <canvas id="gaugeChart" height="230"></canvas>
+        <div style="background:#0a0e17; border:1px solid #1c2536; border-radius:16px; padding:14px; box-sizing:border-box;">
+          <div style="position:relative; width:100%; height:250px;">
+            <canvas id="gaugeChart"></canvas>
+          </div>
           <div style="display:flex; justify-content:space-around; margin-top:6px; font-family:'Segoe UI',sans-serif;">
             <div style="text-align:center;"><div style="color:#8fa3c7;font-size:11px;">SL ACTUEL CUMULÉ</div><div style="color:#00e5ff;font-size:20px;font-weight:800;">$sl_actuel%</div></div>
             <div style="text-align:center;"><div style="color:#8fa3c7;font-size:11px;">SL MAX PROJETÉ</div><div style="color:#ffffff;font-size:20px;font-weight:800;">$sl_projete%</div></div>
@@ -763,6 +768,8 @@ def render_jauge_sl(sl_actuel: float, sl_projete: float, obj_sl: float):
             }]
           },
           options: {
+            responsive: true,
+            maintainAspectRatio: false,
             circumference: 180,
             rotation: -90,
             cutout: '68%',
@@ -770,6 +777,12 @@ def render_jauge_sl(sl_actuel: float, sl_projete: float, obj_sl: float):
             animation: { animateRotate: true, duration: 900 },
           },
           plugins: [aiguillePlugin],
+        });
+
+        // Redessine proprement la jauge si l'iframe est redimensionnée
+        // (ex: repli/dépli de la sidebar Streamlit).
+        window.addEventListener('resize', () => {
+          Chart.getChart('gaugeChart')?.resize();
         });
         </script>
         """
@@ -779,12 +792,14 @@ def render_jauge_sl(sl_actuel: float, sl_projete: float, obj_sl: float):
         sl_projete_raw=f"{sl_projete:.2f}", zone_rouge=f"{zone_rouge:.1f}",
         zone_orange=f"{zone_orange:.1f}", zone_verte=f"{zone_verte:.1f}",
     )
-    components.html(html, height=340)
+    components.html(html, height=380)
 
 
 def render_courbe_projection(df: pd.DataFrame, obj_sl: float):
     """Courbe interactive Chart.js : SL cumulé réalisé vs SL max projeté vs
-    ligne d'objectif, tranche par tranche."""
+    ligne d'objectif, tranche par tranche.
+    Même correction que la jauge : conteneur à hauteur fixe +
+    maintainAspectRatio désactivé pour un rendu net sans avoir à zoomer."""
     labels = [str(v) for v in df["tranche"].tolist()]
     sl_cumule = [float(v) for v in df["sl_cumule"].round(1).tolist()]
     sl_projete = [float(v) for v in df["sl_max_projete"].round(1).tolist()]
@@ -794,8 +809,10 @@ def render_courbe_projection(df: pd.DataFrame, obj_sl: float):
 
     tpl = string.Template(
         """
-        <div style="background:#0a0e17; border:1px solid #1c2536; border-radius:16px; padding:16px;">
-          <canvas id="courbeChart" height="230"></canvas>
+        <div style="background:#0a0e17; border:1px solid #1c2536; border-radius:16px; padding:16px; box-sizing:border-box;">
+          <div style="position:relative; width:100%; height:290px;">
+            <canvas id="courbeChart"></canvas>
+          </div>
         </div>
         <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
         <script>
@@ -828,6 +845,7 @@ def render_courbe_projection(df: pd.DataFrame, obj_sl: float):
           },
           options: {
             responsive: true,
+            maintainAspectRatio: false,
             interaction: { mode: 'index', intersect: false },
             plugins: {
               legend: { labels: { color: '#c7d3e8', font: { size: 11 } } },
@@ -839,6 +857,10 @@ def render_courbe_projection(df: pd.DataFrame, obj_sl: float):
             },
           }
         });
+
+        window.addEventListener('resize', () => {
+          Chart.getChart('courbeChart')?.resize();
+        });
         </script>
         """
     )
@@ -846,15 +868,29 @@ def render_courbe_projection(df: pd.DataFrame, obj_sl: float):
         labels=json.dumps(labels), sl_cumule=json.dumps(sl_cumule),
         sl_projete=json.dumps(sl_projete), objectif=json.dumps(objectif),
     )
-    components.html(html, height=300)
+    components.html(html, height=340)
     if bascule_x:
         st.caption(f"⛔ Bascule projetée au point de non-retour visible à la tranche **{bascule_x}**.")
 
 
 def render_vigie_ia(diagnostic_libelle: str, actions: list, heure_analyse: str, statut: str):
-    """Panneau 'Vigie IA Assistant' avec effet machine à écrire (JavaScript)."""
+    """Panneau 'Vigie IA Assistant' avec effet machine à écrire (JavaScript).
+
+    Corrections apportées :
+      - le texte affiché ne contient plus de mention figée du type
+        « RECOMMANDATIONS EN COURS DE GÉNÉRATION... » qui ne disparaissait
+        jamais une fois l'animation terminée (donnait l'impression que la
+        Vigie était bloquée / ne fonctionnait pas) ;
+      - les actions prescriptives apparaissent désormais en cascade
+        (délai croissant) une fois le texte d'analyse entièrement écrit,
+        au lieu de toutes s'afficher en même temps.
+    """
     couleur = {"POINT DE NON RETOUR ATTEINT": "#ff2d55", "EN DANGER": "#ffae00"}.get(statut, "#00ff88")
-    texte_analyse = f"[ANALYSE VIGIE — TRANCHE {heure_analyse}]\n> DIAGNOSTIC : {diagnostic_libelle}\n> RECOMMANDATIONS EN COURS DE GÉNÉRATION..."
+    texte_analyse = (
+        f"[ANALYSE VIGIE — TRANCHE {heure_analyse}]\n"
+        f"> STATUT : {statut}\n"
+        f"> DIAGNOSTIC : {diagnostic_libelle}"
+    )
     actions_html = "".join(f'<div class="vigie-action">▸ {a}</div>' for a in actions)
 
     tpl = string.Template(
@@ -868,7 +904,12 @@ def render_vigie_ia(diagnostic_libelle: str, actions: list, heure_analyse: str, 
         .vigie-header { color: $couleur; font-size: 14px; font-weight: 800; letter-spacing: 1px; margin-bottom: 10px; }
         .vigie-text { color: #c9f0ff; font-size: 13.5px; line-height: 1.7; white-space: pre-wrap; min-height: 70px; }
         .vigie-actions { margin-top: 14px; border-top: 1px dashed #223049; padding-top: 10px; }
-        .vigie-action { color: #e6f1ff; font-size: 13px; padding: 3px 0; opacity: 0; animation: apparition 0.5s forwards; }
+        .vigie-action {
+            color: #e6f1ff; font-size: 13px; padding: 3px 0;
+            opacity: 0; animation: apparition 0.5s forwards;
+            animation-play-state: paused;
+        }
+        .vigie-action.pret { animation-play-state: running; }
         @keyframes apparition { to { opacity: 1; } }
         .curseur { display:inline-block; width:8px; background:$couleur; animation: clignote 0.8s infinite; }
         @keyframes clignote { 0%,100% {opacity:1;} 50% {opacity:0;} }
@@ -882,13 +923,21 @@ def render_vigie_ia(diagnostic_libelle: str, actions: list, heure_analyse: str, 
         const texte = $texte_json;
         let i = 0;
         const el = document.getElementById('vigie-text');
+
         function ecrire() {
             if (i < texte.length) {
                 el.innerHTML = texte.substring(0, i + 1).replace(/\\n/g, '<br>') + '<span class="curseur">&nbsp;</span>';
                 i++;
                 setTimeout(ecrire, 14);
             } else {
+                // Texte final, sans curseur clignotant résiduel
                 el.innerHTML = texte.replace(/\\n/g, '<br>');
+                // Révèle les actions en cascade, une fois l'analyse terminée
+                const actions = document.querySelectorAll('.vigie-action');
+                actions.forEach((a, idx) => {
+                    a.style.animationDelay = (idx * 0.18) + 's';
+                    a.classList.add('pret');
+                });
             }
         }
         ecrire();
